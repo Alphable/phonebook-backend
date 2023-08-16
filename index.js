@@ -1,14 +1,19 @@
 const express = require('express')
 const morgan = require('morgan')
 const cors = require('cors')
-const app = express()
+// require('dotenv').config()
 
+const Person = require('./mongo')
+const app = express()
+app.use(cors())
 app.use(express.json())
 app.use(express.static('build'))
+
+// a request&response logger middleware
 // custom a tokon
 morgan.token('body', (request)=> {return JSON.stringify(request.body)})
 app.use(morgan(':method :url :status :res[content-length] - :response-time ms :body'))
-app.use(cors())
+
 
 let persons = [
     {
@@ -33,9 +38,9 @@ let persons = [
       }
 ]
 
-const generateId = () => {
+/* const generateId = () => {
     return Math.floor(Math.random()*1000)
-}
+} */
 
 app.get('/info', (request, response) => {
     response.send(
@@ -48,45 +53,92 @@ app.get('/info', (request, response) => {
 })
 
 app.get('/api/persons', (request, response) => {
-    response.json(persons)
-    console.log('got all!')
+    Person.find({}).then(people => {
+        response.json(people)
+    })
+
 })
 
-app.get('/api/persons/:id', (request, response) => {
-    const id = Number(request.params.id)
+app.get('/api/persons/:id', (request, response, next) => {
+/*     const id = Number(request.params.id)
     const person = persons.find(one => {return one.id === id})
     if (!person){
         return response.status(404).end()
     }else{
         response.json(person)
-    }
+    } */
+    Person.findById(request.params.id).then(person => {
+        if(person){
+            response.json(person)
+        }else{
+            response.status(404).end()
+        }
+    })
+    .catch(error => next(error))
 })
 
-app.delete('/api/persons/:id', (request, response) => {
-    const id = Number(request.params.id)
+app.delete('/api/persons/:id', (request, response,next) => {
+/*     const id = Number(request.params.id)
     persons = persons.filter(one => {return one.id !== id})
     console.log(persons)
-    response.status(204).end()
+    response.status(204).end() */
+    Person.findByIdAndDelete(request.params.id)
+    .then(result => {
+        response.status(204).end()
+    })
+    .catch(error => next(error))
 })
 
-app.post('/api/persons', (request, response) => {
+app.post('/api/persons', (request, response, next) => {
     const body = request.body
-    console.log(body)
     if(!body.name || !body.number ){
-        return response.status(400).json({error:'items not fulfilled.'})
+        return response.status(400).send({error: 'items missing'})
     }
-    if(persons.find(one => one.name === body.name)){
-        return response.status(400).json({ error:'name must be unique' })
-    }
+    // check if the one already been saved
+    Person.findOne({ name: body.name })
+    .then(existedPerson => { //人找到 没找到 都是.then的input，而不是.catch
+        console.log(existedPerson)
+        if (existedPerson){// 如果非空
+            console.log('this person [', existedPerson.name, '] already existed.')
+            return response.status(400).send({error:'name must be unique'} )
+        }
+        // continue add person
+        const person = new Person({
+            name: body.name,
+            number: body.number
+        })
+        person.save().then(savedPerson => { // mogodb的保存方法
+            response.json(savedPerson)
+            console.log('person saved!')
+        }).catch(error => next(error))
+        }
+    )
+})
+
+app.put('/api/persons/:id', (request, response,next) => {
+    const body = request.body
     const person = {
         name: body.name,
-        number: body.number,
-        id: generateId()
+        number: body.number
     }
-    persons = persons.concat(person)
-    response.json(person)
+    Person.findByIdAndUpdate(request.params.id,person, {new: true, runValidators: true} )
+    .then(returnedPerson => {
+        response.json(returnedPerson)
+    })
+    .catch(error => next(error))
 })
+// 统一处理错误
+const errorHandler = (error, request, response, next) => {
+    console.log(error.message)
+    if (error.name === 'CastError'){
+        return response.status(400).json({error: 'malformatted id'})
+    }else if(error.name === 'ValidationError') {
+        return response.status(400).send({ error: error.message})
+    }
+    next(error)
+}
+app.use(errorHandler)
 
-// Heroku根据环境变量来配置应用的端口 or 本地开发时用3004
-const PORT = process.env.PORT || 3004
+// 在Heroku来配置应用的端口 or 本地开发时用.env里设置的
+const PORT = process.env.PORT
 app.listen(PORT, () => {console.log(`Server running on ${PORT}`)})
